@@ -135,13 +135,13 @@ for(const g of CONFUSE) for(const a of g) for(const b of g)
   if(a !== b) (nearMap[a] ||= new Set()).add(b);
 const near = l => [...(nearMap[l] || [])];
 
-const KEY = 'lautjagd.v1';
+const KEY = 'lautjagd.v2';   // v1 stalled on 3 letters; old state is not worth keeping
 const WINDOW = 10;          // trials the accuracy is judged over
 const TARGET_HI = 0.85;     // above this, make it harder
 const TARGET_LO = 0.60;     // below this, make it easier
 
 let S = {
-  live: ORDER.slice(0, 3),  // letters currently in play
+  live: ORDER.slice(0, 4),  // letters currently in play
   cols: 2,                  // 2 -> 6 choices
   tier: 0,                  // 0 distinct distractors, 1 mixed, 2 confusable
   recent: [],               // last WINDOW results
@@ -170,17 +170,19 @@ function accuracy(){
   return S.recent.reduce((n,v)=>n+v,0) / S.recent.length;
 }
 
-// Keep success near 80%: widen the field, then make distractors confusable,
-// then bring in a new letter. Struggling walks the same ladder back down.
+// Keep success near 80%. New letters come in early -- the point is to cover the
+// alphabet, not to grind three letters at maximum difficulty. Order: widen the
+// field a little, add a letter, make distractors confusable, widen further.
 function adapt(){
   if(S.recent.length < 6) return;
   const acc = accuracy();
   if(acc >= TARGET_HI){
-    if(S.cols < 6) S.cols++;
-    else if(S.tier < 2) S.tier++;
-    else if(S.live.length < ORDER.length && S.sinceNew >= 5){
-      S.live.push(ORDER[S.live.length]); S.sinceNew = 0; S.cols = Math.max(2, S.cols - 1);
+    if(S.cols < 4) S.cols++;
+    else if(S.live.length < ORDER.length && S.sinceNew >= 4){
+      S.live.push(ORDER[S.live.length]); S.sinceNew = 0;
     }
+    else if(S.tier < 2) S.tier++;
+    else if(S.cols < 6) S.cols++;
     S.recent = [];
   } else if(acc <= TARGET_LO){
     if(S.tier > 0) S.tier--;
@@ -189,12 +191,17 @@ function adapt(){
   }
 }
 
+let lastTarget = null;
+
+// Weighted so shaky letters come up more often, but every live letter stays in
+// the draw -- picking only from the weakest half meant a letter he had learned
+// was never seen again, and the same two cycled forever.
 function nextTarget(){
-  // favour the letters that are least secure, so practice lands where it is needed
-  const scored = S.live.map(l => ({l, m: S.mastery[l] ?? 0}));
-  scored.sort((a,b) => a.m - b.m);
-  const front = scored.slice(0, Math.max(2, Math.ceil(scored.length / 2)));
-  return pick(front).l;
+  const cand = S.live.length > 1 ? S.live.filter(l => l !== lastTarget) : S.live.slice();
+  const w = cand.map(l => 1 + 2 * (1 - (S.mastery[l] ?? 0)));
+  let r = Math.random() * w.reduce((a,b) => a + b, 0);
+  for(let i = 0; i < cand.length; i++){ r -= w[i]; if(r <= 0) return cand[i]; }
+  return cand[cand.length - 1];
 }
 
 function distractors(t, n){
@@ -229,6 +236,7 @@ function render(){
 function trial(){
   locked = false;
   target = nextTarget();
+  lastTarget = target;
   const opts = shuffle([target, ...distractors(target, S.cols - 1)]);
 
   const tiles = $('tiles');
@@ -260,7 +268,7 @@ function answer(btn, l){
   if(S.recent.length > WINDOW) S.recent.shift();
   S.sinceNew++;
   const m = S.mastery[target] ?? 0;
-  S.mastery[target] = m + (ok ? 0.28 : -0.34) * (1 - Math.abs(m - (ok ? 1 : 0)) * 0) ;
+  S.mastery[target] = m + (ok ? 0.28 : -0.34);
   S.mastery[target] = Math.max(0, Math.min(1, S.mastery[target]));
 
   if(ok){
@@ -283,7 +291,7 @@ $('go').addEventListener('click', () => {
 });
 $('listen').addEventListener('click', () => { if(target) play(target); });
 $('reset').addEventListener('click', () => {
-  S = {live: ORDER.slice(0,3), cols:2, tier:0, recent:[], mastery:{}, seen:0, right:0, sinceNew:0};
+  S = {live: ORDER.slice(0,4), cols:2, tier:0, recent:[], mastery:{}, seen:0, right:0, sinceNew:0};
   save(); $('start').hidden = false; $('play').hidden = true; render();
 });
 render();
