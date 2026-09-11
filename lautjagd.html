@@ -22,6 +22,16 @@
   h1{font-family:Fredoka,system-ui,sans-serif; font-weight:600; font-size:clamp(22px,5vw,30px); margin:0}
   h1 .dot{color:var(--rule-red)}
   .stufe{font-size:13px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-soft)}
+  .steps{display:flex; align-items:center; gap:6px}
+  .step{
+    all:unset; cursor:pointer; display:grid; place-items:center;
+    width:34px; height:34px; border-radius:50%;
+    background:var(--paper); border:2px solid var(--ink-soft); color:var(--ink);
+    font-family:Fredoka,system-ui,sans-serif; font-size:19px; line-height:1;
+  }
+  .step:active{transform:translateY(1px)}
+  .step[disabled]{opacity:.35; cursor:default}
+  .step:focus-visible{outline:3px solid var(--rule-blue); outline-offset:2px}
 
   /* last ten answers — lets a parent see the 80% band holding */
   .streak{display:flex; gap:5px; justify-content:center; min-height:12px}
@@ -76,7 +86,11 @@
 <div class="wrap">
   <header>
     <h1>Lautjagd<span class="dot">.</span></h1>
-    <span class="stufe" id="stufe"></span>
+    <span class="steps">
+      <span class="stufe" id="stufe"></span>
+      <button class="step" id="easier" aria-label="Leichter">−</button>
+      <button class="step" id="harder" aria-label="Schwerer">+</button>
+    </span>
   </header>
 
   <div class="start" id="start">
@@ -139,16 +153,18 @@ const KEY = 'lautjagd.v2';   // v1 stalled on 3 letters; old state is not worth 
 const WINDOW = 10;          // trials the accuracy is judged over
 const TARGET_HI = 0.85;     // above this, make it harder
 const TARGET_LO = 0.60;     // below this, make it easier
+const MIN_COLS = 3;         // two options is a coin flip, not a choice
 
 let S = {
   live: ORDER.slice(0, 4),  // letters currently in play
-  cols: 2,                  // 2 -> 6 choices
+  cols: 3,                  // 3 -> 6 choices
   tier: 0,                  // 0 distinct distractors, 1 mixed, 2 confusable
   recent: [],               // last WINDOW results
   mastery: {},              // letter -> 0..1
   seen: 0, right: 0, sinceNew: 0,
 };
 try{ const raw = localStorage.getItem(KEY); if(raw) S = {...S, ...JSON.parse(raw)}; }catch(e){}
+S.cols = Math.max(MIN_COLS, S.cols);   // lift saved games off the old floor of 2
 const save = () => { try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} };
 
 const $ = id => document.getElementById(id);
@@ -173,22 +189,35 @@ function accuracy(){
 // Keep success near 80%. New letters come in early -- the point is to cover the
 // alphabet, not to grind three letters at maximum difficulty. Order: widen the
 // field a little, add a letter, make distractors confusable, widen further.
+// One ladder, walked by the adapter and by the +/- buttons alike, so a manual
+// nudge lands the game in a state the adapter also understands.
+function harder(force){
+  if(S.cols < 4) S.cols++;
+  else if(S.live.length < ORDER.length && (force || S.sinceNew >= 4)){
+    S.live.push(ORDER[S.live.length]); S.sinceNew = 0;
+  }
+  else if(S.tier < 2) S.tier++;
+  else if(S.cols < 6) S.cols++;
+  else return false;
+  S.recent = [];
+  return true;
+}
+function easier(){
+  if(S.tier > 0) S.tier--;
+  else if(S.cols > MIN_COLS) S.cols--;
+  else if(S.live.length > 3) S.live.pop();
+  else return false;
+  S.recent = [];
+  return true;
+}
+function atCeiling(){ return S.cols >= 6 && S.tier >= 2 && S.live.length >= ORDER.length; }
+function atFloor(){ return S.cols <= MIN_COLS && S.tier === 0 && S.live.length <= 3; }
+
 function adapt(){
   if(S.recent.length < 6) return;
   const acc = accuracy();
-  if(acc >= TARGET_HI){
-    if(S.cols < 4) S.cols++;
-    else if(S.live.length < ORDER.length && S.sinceNew >= 4){
-      S.live.push(ORDER[S.live.length]); S.sinceNew = 0;
-    }
-    else if(S.tier < 2) S.tier++;
-    else if(S.cols < 6) S.cols++;
-    S.recent = [];
-  } else if(acc <= TARGET_LO){
-    if(S.tier > 0) S.tier--;
-    else if(S.cols > 2) S.cols--;
-    S.recent = [];
-  }
+  if(acc >= TARGET_HI) harder(false);
+  else if(acc <= TARGET_LO) easier();
 }
 
 let lastTarget = null;
@@ -223,6 +252,8 @@ function distractors(t, n){
 
 function render(){
   $('stufe').textContent = S.live.length + ' Buchstaben · ' + S.cols + ' zur Wahl';
+  $('harder').disabled = atCeiling();
+  $('easier').disabled = atFloor();
   $('tally').textContent = S.seen ? S.right + ' von ' + S.seen + ' richtig' : '';
   const st = $('streak'); st.innerHTML = '';
   for(let i=0;i<WINDOW;i++){
@@ -290,8 +321,12 @@ $('go').addEventListener('click', () => {
   trial();
 });
 $('listen').addEventListener('click', () => { if(target) play(target); });
+// Skip ahead: each press takes one rung, so holding it steps through choices,
+// then new letters, then confusable distractors.
+$('harder').addEventListener('click', () => { if(harder(true)){ save(); trial(); } });
+$('easier').addEventListener('click', () => { if(easier()){ save(); trial(); } });
 $('reset').addEventListener('click', () => {
-  S = {live: ORDER.slice(0,4), cols:2, tier:0, recent:[], mastery:{}, seen:0, right:0, sinceNew:0};
+  S = {live: ORDER.slice(0,4), cols:3, tier:0, recent:[], mastery:{}, seen:0, right:0, sinceNew:0};
   save(); $('start').hidden = false; $('play').hidden = true; render();
 });
 render();
